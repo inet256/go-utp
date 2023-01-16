@@ -1,6 +1,7 @@
 package utp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/anacrolix/missinggo"
+	"github.com/brendoncarroll/stdctx/units"
 )
 
 // Conn is a uTP stream and implements net.Conn. It owned by a Socket, which
@@ -150,7 +152,7 @@ func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err 
 	if c.unpendSendState() && _type != stState {
 		// We needed to send a state packet, but this packet suppresses that
 		// need.
-		unsentStatePackets.Add(1)
+		telemIncr(ctx, "unsentStatePackets", int(1), units.None)
 	}
 	return
 }
@@ -167,7 +169,7 @@ func (c *Conn) pendSendState() {
 	if c.pendingSendState {
 		// A state packet is pending but hasn't been sent, and we want to send
 		// another.
-		unsentStatePackets.Add(1)
+		telemIncr(context.TODO(), "unsentStatePackets", int(1), units.None)
 	}
 	c.pendingSendState = true
 	if !c.sendPendingSendStateTimerActive {
@@ -234,7 +236,8 @@ func (c *Conn) latency() (ret time.Duration) {
 
 func (c *Conn) sendState() {
 	c.send(stState, c.send_id, nil, c.seq_nr)
-	sentStatePackets.Add(1)
+
+	telemIncr(context.TODO(), "sentStatePackets", int(1), units.None)
 }
 
 func (c *Conn) sendReset() {
@@ -257,7 +260,7 @@ func (c *Conn) ack(nr uint16) {
 	i := nr - c.lastAck - 1
 	if int(i) >= len(c.unackedSends) {
 		// Remote has acknowledged receipt of packets we haven't even sent.
-		acksReceivedAheadOfSyn.Add(1)
+		telemIncr(context.TODO(), "acksReceivedAheadOfSyn", int(1), units.None)
 		// log.Printf("got ack ahead of syn (%x > %x)", nr, c.seq_nr-1)
 		return
 	}
@@ -322,7 +325,7 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 	}
 	switch send.acksSkipped {
 	case 3, 60:
-		ackSkippedResends.Add(1)
+		telemIncr(context.TODO(), "ackSkippedResends", int(1), units.None)
 		send.resend()
 		send.resendTimer.Reset(c.resendTimeout() * time.Duration(send.numResends))
 	default:
@@ -348,7 +351,7 @@ func (c *Conn) lazyDestroy() {
 }
 
 func (c *Conn) processDelivery(h header, payload []byte) {
-	deliveriesProcessed.Add(1)
+	telemIncr(context.TODO(), "deliveriesProcessed", int(1), units.None)
 	defer c.lazyDestroy()
 	c.assertHeader(h)
 	c.peerWndSize = h.WndSize
@@ -513,7 +516,7 @@ func (c *Conn) Close() (err error) {
 }
 
 func (c *Conn) LocalAddr() net.Addr {
-	return addr{c.socket.Addr()}
+	return c.socket.Addr()
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
@@ -553,7 +556,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 }
 
 func (c *Conn) RemoteAddr() net.Addr {
-	return addr{c.remoteSocketAddr}
+	return c.remoteSocketAddr
 }
 
 func (c *Conn) String() string {

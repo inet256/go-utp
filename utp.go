@@ -13,7 +13,6 @@ package utp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -22,6 +21,7 @@ import (
 	"time"
 
 	pprofsync "github.com/anacrolix/sync"
+	"github.com/brendoncarroll/stdctx/units"
 )
 
 const (
@@ -78,10 +78,12 @@ func setDefaultDurations() {
 }
 
 func init() {
+	// TODO: Remove
 	setDefaultDurations()
 }
 
 // Strongly-type guarantee of resolved network address.
+// TODO: remove, just use net.Addr
 type resolvedAddrStr string
 
 type read struct {
@@ -92,34 +94,22 @@ type read struct {
 type syn struct {
 	seq_nr, conn_id uint16
 	// net.Addr.String() of a Socket's real net.PacketConn.
-	addr string
+	addr net.Addr
 }
 
 var (
+	// TODO: what the actual fuck?
 	mu                         pprofsync.RWMutex
 	sockets                    = map[*Socket]struct{}{}
 	logLevel                   = 0
 	artificialPacketDropChance = 0.0
 )
 
+// TODO: remove
 func init() {
 	logLevel, _ = strconv.Atoi(os.Getenv("GO_UTP_LOGGING"))
 	fmt.Sscanf(os.Getenv("GO_UTP_PACKET_DROP"), "%f", &artificialPacketDropChance)
 }
-
-var (
-	errClosed               = errors.New("closed")
-	errTimeout    net.Error = timeoutError{"i/o timeout"}
-	errAckTimeout           = timeoutError{"timed out waiting for ack"}
-)
-
-type timeoutError struct {
-	msg string
-}
-
-func (me timeoutError) Timeout() bool   { return true }
-func (me timeoutError) Error() string   { return me.msg }
-func (me timeoutError) Temporary() bool { return false }
 
 type st int
 
@@ -142,10 +132,10 @@ func (me st) String() string {
 
 const (
 	stData  st = 0
-	stFin      = 1
-	stState    = 2
-	stReset    = 3
-	stSyn      = 4
+	stFin   st = 1
+	stState st = 2
+	stReset st = 3
+	stSyn   st = 4
 
 	// Used for validating packet headers.
 	stMax = stSyn
@@ -155,29 +145,6 @@ type recv struct {
 	seen bool
 	data []byte
 	Type st
-}
-
-// Attempt to connect to a remote uTP listener, creating a Socket just for
-// this connection.
-func Dial(addr string) (net.Conn, error) {
-	return DialContext(context.Background(), addr)
-}
-
-// Same as Dial with a timeout parameter. Creates a Socket just for the
-// connection, which will be closed with the Conn is. To reuse another Socket,
-// see Socket.Dial.
-func DialContext(ctx context.Context, addr string) (nc net.Conn, err error) {
-	s, err := NewSocket("udp", ":0")
-	if err != nil {
-		return
-	}
-	defer s.Close()
-	return s.DialContext(ctx, "", addr)
-}
-
-// Listen creates listener Socket to accept incoming connections.
-func Listen(laddr string) (net.Listener, error) {
-	return NewSocket("udp", laddr)
 }
 
 func nowTimestamp() uint32 {
@@ -190,4 +157,12 @@ func seqLess(a, b uint16) bool {
 	} else {
 		return a < b && a >= b-0x8000
 	}
+}
+
+func telemIncr(ctx context.Context, m string, x any, u units.Unit) {
+
+}
+
+func telemMark(ctx context.Context, m string, x any, u units.Unit) {
+
 }
