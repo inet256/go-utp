@@ -251,6 +251,7 @@ func (c *Conn) addLatency(l time.Duration) {
 
 // Ack our send with the given sequence number.
 func (c *Conn) ack(nr uint16) {
+	ctx := context.TODO()
 	if !seqLess(c.lastAck, nr) {
 		// Already acked.
 		return
@@ -259,7 +260,7 @@ func (c *Conn) ack(nr uint16) {
 	if int(i) >= len(c.unackedSends) {
 		// Remote has acknowledged receipt of packets we haven't even sent.
 		telemIncr(context.TODO(), "acksReceivedAheadOfSyn", int(1), units.None)
-		// log.Printf("got ack ahead of syn (%x > %x)", nr, c.seq_nr-1)
+		logctx.Debugf(ctx, "got ack ahead of syn (%x > %x)", nr, c.seq_nr-1)
 		return
 	}
 	s := c.unackedSends[i]
@@ -415,7 +416,7 @@ func (c *Conn) applyAcks(h header) {
 			for i := 0; i < bitmask.NumBits(); i++ {
 				if bitmask.BitIsSet(i) {
 					nr := h.AckNr + 2 + uint16(i)
-					// log.Printf("selectively acked %d", nr)
+					logctx.Debugf(context.TODO(), "selectively acked %d", nr)
 					c.ack(nr)
 				} else {
 					c.ackSkipped(h.AckNr + 2 + uint16(i))

@@ -1,10 +1,11 @@
 package utp
 
 import (
-	"log"
+	"context"
 	"time"
 
 	"github.com/anacrolix/missinggo"
+	"github.com/brendoncarroll/stdctx/logctx"
 )
 
 type send struct {
@@ -67,6 +68,6 @@ func (s *send) resend() {
 	}
 	err := s.conn.send(s._type, s.connID, s.payload, s.seqNr)
 	if err != nil {
-		log.Printf("error resending packet: %s", err)
+		logctx.Warnf(context.TODO(), "error resending packet: %s", err)
 	}
 }

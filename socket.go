@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log"
 	"math/rand"
 	"net"
 	"sync"
@@ -227,7 +226,7 @@ func (s *Socket) handlePacketReceivedForEstablishedConn(h header, from net.Addr,
 			// recv_id, already has an existing connection that was dialled
 			// *out* from this socket, which is why the send_id is 1 higher,
 			// rather than 1 lower than the recv_id.
-			log.Print("resetting conflicting syn")
+			logctx.Warnf(context.TODO(), "resetting conflicting syn")
 			s.reset(from, h.SeqNr, h.ConnID)
 			return
 		} else if h.ConnID != c.send_id {
