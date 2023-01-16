@@ -7,7 +7,7 @@ Go implementation of the [Micro Transport Protocol](https://en.wikipedia.org/wik
 First you will need a `net.PacketConn`.
 This can be anything implementing the interface.
 There are no abstraction-breaking checks for a particular implementation.
-Then use `utp.New` to get started.
+Then use `utp.NewSocket` to get started.
 
 ```go
 func createSocket() *utp.Socket {
@@ -18,7 +18,7 @@ func createSocket() *utp.Socket {
     }
 
     // Call utp.New to create a *utp.Socket from the net.PacketConn
-    s := utp.New(pc)
+    s := utp.NewSocket(pc)
     return s
 }
 
