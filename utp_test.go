@@ -187,7 +187,7 @@ func connectSelfLots(t testing.TB, n int) {
 	})
 	dialErr := make(chan error)
 	connCh := make(chan net.Conn)
-	dialSema := make(chan struct{}, backlog)
+	dialSema := make(chan struct{}, DefaultBacklogLen)
 	for i := 0; i < n; i++ {
 		go func() {
 			dialSema <- struct{}{}
@@ -248,10 +248,10 @@ func TestRejectDialBacklogFilled(t *testing.T) {
 		errChan <- err
 	}
 	// Fill the backlog.
-	for i := 0; i < backlog; i++ {
+	for i := 0; i < DefaultBacklogLen; i++ {
 		go dial()
 	}
-	sleepWhile(&mu, func() bool { return len(s.backlog) < backlog })
+	sleepWhile(&mu, func() bool { return len(s.backlog) < DefaultBacklogLen })
 	select {
 	case err := <-errChan:
 		t.Fatalf("got premature error: %s", err)
@@ -262,7 +262,7 @@ func TestRejectDialBacklogFilled(t *testing.T) {
 	err := <-errChan
 	assert.EqualError(t, err, "peer reset")
 	s.Close()
-	for i := 0; i < backlog; i++ {
+	for i := 0; i < DefaultBacklogLen; i++ {
 		<-errChan
 	}
 }

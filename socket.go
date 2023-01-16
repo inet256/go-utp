@@ -64,7 +64,7 @@ func NewSocket(pc net.PacketConn, opts ...SocketOption) *Socket {
 	}
 	s := &Socket{
 		config:      config,
-		backlog:     make(map[syn]struct{}, backlog),
+		backlog:     make(map[syn]struct{}, config.backlogLen),
 		pc:          pc,
 		unusedReads: make(chan read, 100),
 		wgReadWrite: sync.WaitGroup{},
@@ -160,7 +160,7 @@ func (s *Socket) pushBacklog(syn syn) {
 	// Pop a pseudo-random syn to make room. TODO: Use missinggo/orderedmap,
 	// coz that's what is wanted here.
 	for k := range s.backlog {
-		if len(s.backlog) < backlog {
+		if len(s.backlog) < s.config.backlogLen {
 			break
 		}
 		delete(s.backlog, k)

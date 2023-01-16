@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	pprofsync "github.com/anacrolix/sync"
@@ -12,11 +11,6 @@ import (
 )
 
 const (
-	// Maximum received SYNs that haven't been accepted. If more SYNs are
-	// received, a pseudo randomly selected SYN is replied to with a reset to
-	// make room.
-	backlog = 50
-
 	// IPv6 min MTU is 1280, -40 for IPv6 header, and ~8 for fragment header?
 	minMTU = 1438 // Why?
 
@@ -37,12 +31,6 @@ const (
 	// non-state packets that are being sent also fill the role.
 	pendingSendStateDelay = 500 * time.Microsecond
 )
-
-var sendBufferPool = sync.Pool{
-	New: func() interface{} { return make([]byte, minMTU) },
-}
-
-const ()
 
 type read struct {
 	data []byte

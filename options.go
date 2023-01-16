@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+const (
+	DefaultBacklogLen = 50
+)
+
 // SocketOption configures a Socket
 type SocketOption func(*socketConfig)
 
@@ -15,15 +19,20 @@ type socketConfig struct {
 	initialLatency    time.Duration
 	packetReadTimeout time.Duration
 
+	backlogLen int
+
 	connConfig
 }
 
 func defaultSocketConfig() socketConfig {
 	return socketConfig{
-		bgCtx:             context.Background(),
-		initialLatency:    400 * time.Millisecond,
+		bgCtx: context.Background(),
+
 		writeTimeout:      15 * time.Second,
+		initialLatency:    400 * time.Millisecond,
 		packetReadTimeout: 2 * time.Minute,
+
+		backlogLen: DefaultBacklogLen,
 	}
 }
 
@@ -55,6 +64,15 @@ func WithInitialLatency(d time.Duration) SocketOption {
 func WithPacketReadTimeout(d time.Duration) SocketOption {
 	return func(c *socketConfig) {
 		c.packetReadTimeout = d
+	}
+}
+
+// Maximum received SYNs that haven't been accepted. If more SYNs are
+// received, a pseudo randomly selected SYN is replied to with a reset to
+// make room.
+func WithBacklogLen(n int) SocketOption {
+	return func(c *socketConfig) {
+		c.backlogLen = n
 	}
 }
 
