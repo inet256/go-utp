@@ -7,60 +7,40 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
-func getTCPConnectionPair() (net.Conn, net.Conn, error) {
-	lst, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var conn0 net.Conn
-	var err0 error
-	done := make(chan struct{})
-	go func() {
-		conn0, err0 = lst.Accept()
-		close(done)
-	}()
-
-	conn1, err := net.Dial("tcp", lst.Addr().String())
-	if err != nil {
-		return nil, nil, err
-	}
-
-	<-done
-	if err0 != nil {
-		return nil, nil, err0
-	}
-	return conn0, conn1, nil
+func getTCPConnectionPair(t testing.TB) (c1, c2 net.Conn) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	eg := errgroup.Group{}
+	eg.Go(func() (err error) {
+		c1, err = l.Accept()
+		return err
+	})
+	eg.Go(func() (err error) {
+		c2, err = net.Dial("tcp", l.Addr().String())
+		return err
+	})
+	require.NoError(t, eg.Wait())
+	return c1, c2
 }
 
-func getUTPConnectionPair() (net.Conn, net.Conn, error) {
-	lst, err := NewSocket("udp", "127.0.0.1:0")
-	if err != nil {
-		return nil, nil, err
-	}
-	defer lst.Close()
+func getUTPConnectionPair(t testing.TB) (c1, c2 net.Conn) {
+	s1, s2 := newTestSocket(t, newTestUDP(t)), newTestSocket(t, newTestUDP(t))
 
-	var conn0 net.Conn
-	var err0 error
-	done := make(chan struct{})
-	go func() {
-		conn0, err0 = lst.Accept()
-		close(done)
-	}()
-
-	conn1, err := Dial(lst.Addr().String())
-	if err != nil {
-		return nil, nil, err
-	}
-
-	<-done
-	if err0 != nil {
-		return nil, nil, err0
-	}
-
-	return conn0, conn1, nil
+	eg := errgroup.Group{}
+	eg.Go(func() error {
+		var err error
+		c1, err = s1.Accept()
+		return err
+	})
+	eg.Go(func() error {
+		var err error
+		c2, err = s2.DialContext(ctx, s1.LocalAddr())
+		return err
+	})
+	return c1, c2
 }
 
 func requireWriteAll(t testing.TB, b []byte, w io.Writer) {
@@ -108,32 +88,16 @@ func benchConnPair(b *testing.B, c0, c1 net.Conn) {
 }
 
 func BenchmarkSyncthingTCP(b *testing.B) {
-	conn0, conn1, err := getTCPConnectionPair()
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	defer conn0.Close()
-	defer conn1.Close()
-
+	conn0, conn1 := getTCPConnectionPair(b)
 	benchConnPair(b, conn0, conn1)
 }
 
 func BenchmarkSyncthingUDPUTP(b *testing.B) {
-	conn0, conn1, err := getUTPConnectionPair()
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	defer conn0.Close()
-	defer conn1.Close()
-
+	conn0, conn1 := getUTPConnectionPair(b)
 	benchConnPair(b, conn0, conn1)
 }
 
 func BenchmarkSyncthingInprocUTP(b *testing.B) {
-	c0, c1 := connPair()
-	defer c0.Close()
-	defer c1.Close()
+	c0, c1 := newTestConnPair(b)
 	benchConnPair(b, c0, c1)
 }

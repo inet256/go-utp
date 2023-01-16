@@ -1,10 +1,11 @@
 package utp
 
 import (
-	"log"
+	"context"
 	"time"
 
 	"github.com/anacrolix/missinggo"
+	"github.com/brendoncarroll/stdctx/logctx"
 )
 
 type send struct {
@@ -42,13 +43,13 @@ func (s *send) Ack() (latency time.Duration, first bool) {
 }
 
 func (s *send) timedOut() {
-	s.conn.destroy(errAckTimeout)
+	s.conn.destroy(ErrTimeout{IsAck: true})
 }
 
 func (s *send) timeoutResend() {
 	mu.Lock()
 	defer mu.Unlock()
-	if missinggo.MonotonicSince(s.started) >= writeTimeout {
+	if missinggo.MonotonicSince(s.started) >= s.conn.socket.config.writeTimeout {
 		s.timedOut()
 		return
 	}
@@ -67,6 +68,6 @@ func (s *send) resend() {
 	}
 	err := s.conn.send(s._type, s.connID, s.payload, s.seqNr)
 	if err != nil {
-		log.Printf("error resending packet: %s", err)
+		logctx.Warnf(context.TODO(), "error resending packet: %s", err)
 	}
 }

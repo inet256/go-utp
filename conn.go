@@ -1,15 +1,19 @@
 package utp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"time"
 
 	"github.com/anacrolix/missinggo"
+	"github.com/brendoncarroll/stdctx/logctx"
+	"github.com/brendoncarroll/stdctx/units"
 )
+
+var _ net.Conn = &Conn{}
 
 // Conn is a uTP stream and implements net.Conn. It owned by a Socket, which
 // handles dispatching packets to and from Conns.
@@ -58,10 +62,6 @@ type Conn struct {
 	// This timer fires when no packet has been received for a period.
 	packetReadTimeoutTimer *time.Timer
 }
-
-var (
-	_ net.Conn = &Conn{}
-)
 
 func (c *Conn) age() time.Duration {
 	return time.Since(c.created)
@@ -150,7 +150,7 @@ func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err 
 	if c.unpendSendState() && _type != stState {
 		// We needed to send a state packet, but this packet suppresses that
 		// need.
-		unsentStatePackets.Add(1)
+		telemIncr(ctx, "unsentStatePackets", int(1), units.None)
 	}
 	return
 }
@@ -167,7 +167,7 @@ func (c *Conn) pendSendState() {
 	if c.pendingSendState {
 		// A state packet is pending but hasn't been sent, and we want to send
 		// another.
-		unsentStatePackets.Add(1)
+		telemIncr(context.TODO(), "unsentStatePackets", int(1), units.None)
 	}
 	c.pendingSendState = true
 	if !c.sendPendingSendStateTimerActive {
@@ -223,7 +223,7 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 // TODO: Introduce a minimum latency.
 func (c *Conn) latency() (ret time.Duration) {
 	if len(c.latencies) == 0 {
-		return initialLatency
+		return c.socket.config.initialLatency
 	}
 	for _, l := range c.latencies {
 		ret += l
@@ -234,7 +234,8 @@ func (c *Conn) latency() (ret time.Duration) {
 
 func (c *Conn) sendState() {
 	c.send(stState, c.send_id, nil, c.seq_nr)
-	sentStatePackets.Add(1)
+
+	telemIncr(context.TODO(), "sentStatePackets", int(1), units.None)
 }
 
 func (c *Conn) sendReset() {
@@ -250,6 +251,7 @@ func (c *Conn) addLatency(l time.Duration) {
 
 // Ack our send with the given sequence number.
 func (c *Conn) ack(nr uint16) {
+	ctx := context.TODO()
 	if !seqLess(c.lastAck, nr) {
 		// Already acked.
 		return
@@ -257,8 +259,8 @@ func (c *Conn) ack(nr uint16) {
 	i := nr - c.lastAck - 1
 	if int(i) >= len(c.unackedSends) {
 		// Remote has acknowledged receipt of packets we haven't even sent.
-		acksReceivedAheadOfSyn.Add(1)
-		// log.Printf("got ack ahead of syn (%x > %x)", nr, c.seq_nr-1)
+		telemIncr(context.TODO(), "acksReceivedAheadOfSyn", int(1), units.None)
+		logctx.Debugf(ctx, "got ack ahead of syn (%x > %x)", nr, c.seq_nr-1)
 		return
 	}
 	s := c.unackedSends[i]
@@ -322,7 +324,7 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 	}
 	switch send.acksSkipped {
 	case 3, 60:
-		ackSkippedResends.Add(1)
+		telemIncr(context.TODO(), "ackSkippedResends", int(1), units.None)
 		send.resend()
 		send.resendTimer.Reset(c.resendTimeout() * time.Duration(send.numResends))
 	default:
@@ -331,7 +333,7 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 
 // Handle a packet destined for this connection.
 func (c *Conn) receivePacket(h header, payload []byte) {
-	c.packetReadTimeoutTimer.Reset(packetReadTimeout)
+	c.packetReadTimeoutTimer.Reset(c.socket.config.packetReadTimeout)
 	c.processDelivery(h, payload)
 }
 
@@ -348,7 +350,7 @@ func (c *Conn) lazyDestroy() {
 }
 
 func (c *Conn) processDelivery(h header, payload []byte) {
-	deliveriesProcessed.Add(1)
+	telemIncr(context.TODO(), "deliveriesProcessed", int(1), units.None)
 	defer c.lazyDestroy()
 	c.assertHeader(h)
 	c.peerWndSize = h.WndSize
@@ -392,9 +394,7 @@ func (c *Conn) processDelivery(h header, payload []byte) {
 	// 64 should correspond to 8 bytes of selective ack.
 	if inboundIndex >= maxUnackedInbound {
 		// Discard packet too far ahead.
-		if logLevel >= 1 {
-			log.Printf("received packet from %s %d ahead of next seqnr (%x > %x)", c.remoteSocketAddr, inboundIndex, h.SeqNr, c.ack_nr+1)
-		}
+		logctx.Debugf(context.TODO(), "received packet from %s %d ahead of next seqnr (%x > %x)", c.remoteSocketAddr, inboundIndex, h.SeqNr, c.ack_nr+1)
 		return
 	}
 	// Extend inbound so the new packet has a place.
@@ -416,7 +416,7 @@ func (c *Conn) applyAcks(h header) {
 			for i := 0; i < bitmask.NumBits(); i++ {
 				if bitmask.BitIsSet(i) {
 					nr := h.AckNr + 2 + uint16(i)
-					// log.Printf("selectively acked %d", nr)
+					logctx.Debugf(context.TODO(), "selectively acked %d", nr)
 					c.ack(nr)
 				} else {
 					c.ackSkipped(h.AckNr + 2 + uint16(i))
@@ -513,7 +513,7 @@ func (c *Conn) Close() (err error) {
 }
 
 func (c *Conn) LocalAddr() net.Addr {
-	return addr{c.socket.Addr()}
+	return c.socket.Addr()
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
@@ -540,7 +540,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 			return
 		}
 		if c.connDeadlines.read.passed.IsSet() {
-			err = errTimeout
+			err = ErrTimeout{}
 			return
 		}
 		missinggo.WaitEvents(&mu,
@@ -553,7 +553,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 }
 
 func (c *Conn) RemoteAddr() net.Addr {
-	return addr{c.remoteSocketAddr}
+	return c.remoteSocketAddr
 }
 
 func (c *Conn) String() string {
@@ -571,7 +571,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 	defer mu.Unlock()
 	for len(p) != 0 {
 		if c.wroteFin.IsSet() || c.closed.IsSet() {
-			err = errClosed
+			err = ErrClosed
 			return
 		}
 		if c.destroyed.IsSet() {
@@ -579,7 +579,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			return
 		}
 		if c.connDeadlines.write.passed.IsSet() {
-			err = errTimeout
+			err = ErrTimeout{}
 			return
 		}
 		// If peerWndSize is 0, we still want to send something, so don't

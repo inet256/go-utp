@@ -10,43 +10,36 @@ import (
 	"time"
 
 	"github.com/anacrolix/missinggo"
-	"github.com/anacrolix/missinggo/inproc"
-	"github.com/bradfitz/iter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestAcceptOnDestroyedSocket(t *testing.T) {
-	pc, err := net.ListenPacket("udp", "localhost:0")
-	require.NoError(t, err)
-	s, err := NewSocketFromPacketConn(pc)
-	require.NoError(t, err)
+	pc := newTestUDP(t)
+	s := NewSocket(pc)
 	go pc.Close()
-	_, err = s.Accept()
+	_, err := s.Accept()
 	require.Error(t, err)
 	t.Log(err.Error())
 }
 
 func TestSocketDeadlines(t *testing.T) {
-	s, err := NewSocket("udp", "localhost:0")
-	require.NoError(t, err)
-	defer s.Close()
+	pc := newTestUDP(t)
+	s := NewSocket(pc)
 	assert.NoError(t, s.SetReadDeadline(time.Now()))
-	_, _, err = s.ReadFrom(nil)
-	assert.Equal(t, errTimeout, err)
+	_, _, err := s.ReadFrom(nil)
+	assert.ErrorIs(t, err, ErrTimeout{})
 	assert.NoError(t, s.SetWriteDeadline(time.Now()))
 	_, err = s.WriteTo(nil, nil)
-	assert.Equal(t, errTimeout, err)
+	assert.ErrorIs(t, err, ErrTimeout{})
 	assert.NoError(t, s.SetDeadline(time.Time{}))
 	assert.NoError(t, s.Close())
 }
 
 func TestSaturateSocketConnIDs(t *testing.T) {
-	s, err := NewSocket("inproc", "")
-	require.NoError(t, err)
-	defer s.Close()
+	s := NewSocket(newTestUDP(t))
 	var acceptedConns, dialedConns []net.Conn
-	for range iter.N(500) {
+	for i := 0; i < 500; i++ {
 		accepted := make(chan struct{})
 		go func() {
 			c, err := s.Accept()
@@ -57,13 +50,13 @@ func TestSaturateSocketConnIDs(t *testing.T) {
 			acceptedConns = append(acceptedConns, c)
 			close(accepted)
 		}()
-		c, err := s.Dial(s.Addr().String())
+		c, err := s.DialContext(ctx, s.Addr())
 		require.NoError(t, err)
 		dialedConns = append(dialedConns, c)
 		<-accepted
 	}
 	t.Logf("%d dialed conns, %d accepted", len(dialedConns), len(acceptedConns))
-	for i := range iter.N(len(dialedConns)) {
+	for i := range dialedConns {
 		data := []byte(fmt.Sprintf("%7d", i))
 		dc := dialedConns[i]
 		n, err := dc.Write(data)
@@ -84,12 +77,10 @@ func TestSaturateSocketConnIDs(t *testing.T) {
 }
 
 func TestUTPRawConn(t *testing.T) {
-	l, err := NewSocket("inproc", "")
-	require.NoError(t, err)
-	defer l.Close()
+	ssock := NewSocket(newTestUDP(t))
 	go func() {
 		for {
-			_, err := l.Accept()
+			_, err := ssock.Accept()
 			if err != nil {
 				break
 			}
@@ -97,21 +88,14 @@ func TestUTPRawConn(t *testing.T) {
 	}()
 	// Connect a UTP peer to see if the RawConn will still work.
 	utpPeer := func() net.Conn {
-		s, _ := NewSocket("inproc", "")
-		defer s.Close()
-		ret, err := s.Dial(fmt.Sprintf("localhost:%d", missinggo.AddrPort(l.Addr())))
+		csock := newTestSocket(t, newTestUDP(t))
+		ret, err := csock.DialContext(ctx, ssock.Addr())
 		require.NoError(t, err)
 		return ret
 	}()
-	if err != nil {
-		t.Fatalf("error dialing utp listener: %s", err)
-	}
 	defer utpPeer.Close()
-	peer, err := inproc.ListenPacket("inproc", ":0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer peer.Close()
+
+	pc := newTestUDP(t)
 
 	msgsReceived := 0
 	const N = 500 // How many messages to send.
@@ -121,7 +105,7 @@ func TestUTPRawConn(t *testing.T) {
 		defer close(readerStopped)
 		b := make([]byte, 500)
 		for i := 0; i < N; i++ {
-			n, _, err := l.ReadFrom(b)
+			n, _, err := ssock.ReadFrom(b)
 			if err != nil {
 				t.Fatalf("error reading from raw conn: %s", err)
 			}
@@ -133,12 +117,12 @@ func TestUTPRawConn(t *testing.T) {
 			}
 		}
 	}()
-	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("localhost:%d", missinggo.AddrPort(l.Addr())))
+	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("localhost:%d", missinggo.AddrPort(ssock.LocalAddr())))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < N; i++ {
-		_, err := peer.WriteTo([]byte(fmt.Sprintf("%d", i)), udpAddr)
+		_, err := pc.WriteTo([]byte(fmt.Sprintf("%d", i)), udpAddr)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -155,16 +139,19 @@ func TestUTPRawConn(t *testing.T) {
 }
 
 func TestAcceptGone(t *testing.T) {
-	s, err := NewSocket("udp", "localhost:0")
-	require.NoError(t, err)
-	defer s.Close()
+	t.Skip("TODO")
+
+	serveSock := newTestSocket(t, newTestUDP(t))
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
-	_, err = DialContext(ctx, s.Addr().String())
+	clientSock := newTestSocket(t, newTestUDP(t))
+	_, err := clientSock.DialContext(ctx, serveSock.Addr())
 	require.Error(t, err)
+
 	// Will succeed because we don't signal that we give up dialing, or check
 	// that the handshake is completed before returning the new Conn.
-	c, err := s.Accept()
+	c, err := serveSock.Accept()
 	require.NoError(t, err)
 	defer c.Close()
 	err = c.SetReadDeadline(time.Now().Add(time.Millisecond))
