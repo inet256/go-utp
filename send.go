@@ -42,7 +42,7 @@ func (s *send) Ack() (latency time.Duration, first bool) {
 }
 
 func (s *send) timedOut() {
-	s.conn.destroy(errAckTimeout)
+	s.conn.destroy(ErrTimeout{IsAck: true})
 }
 
 func (s *send) timeoutResend() {

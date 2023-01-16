@@ -28,10 +28,10 @@ func TestSocketDeadlines(t *testing.T) {
 	s := NewSocket(pc)
 	assert.NoError(t, s.SetReadDeadline(time.Now()))
 	_, _, err := s.ReadFrom(nil)
-	assert.Equal(t, errTimeout, err)
+	assert.ErrorIs(t, err, ErrTimeout{})
 	assert.NoError(t, s.SetWriteDeadline(time.Now()))
 	_, err = s.WriteTo(nil, nil)
-	assert.Equal(t, errTimeout, err)
+	assert.ErrorIs(t, err, ErrTimeout{})
 	assert.NoError(t, s.SetDeadline(time.Time{}))
 	assert.NoError(t, s.Close())
 }

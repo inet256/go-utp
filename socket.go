@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/anacrolix/missinggo"
-	"github.com/anacrolix/missinggo/inproc"
 	"github.com/anacrolix/missinggo/pproffd"
 	"github.com/brendoncarroll/stdctx/units"
 )
@@ -121,7 +120,7 @@ func (s *Socket) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 		addr = read.from
 		return
 	case <-s.connDeadlines.read.passed.LockedChan(&mu):
-		err = errTimeout
+		err = ErrTimeout{}
 		return
 	}
 }
@@ -130,7 +129,7 @@ func (s *Socket) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 func (s *Socket) WriteTo(b []byte, addr net.Addr) (n int, err error) {
 	mu.Lock()
 	if s.connDeadlines.write.passed.IsSet() {
-		err = errTimeout
+		err = ErrTimeout{}
 	}
 	s.wgReadWrite.Add(1)
 	defer s.wgReadWrite.Done()
@@ -149,22 +148,6 @@ func (s *Socket) unusedRead(read read) {
 		// Drop the packet.
 		telemIncr(context.TODO(), "unusedReadsDropped", int(1), units.None)
 	}
-}
-
-func (s *Socket) strNetAddr(str string) (a net.Addr) {
-	var err error
-	switch n := s.network(); n {
-	case "udp":
-		a, err = net.ResolveUDPAddr(n, str)
-	case "inproc":
-		a, err = inproc.ResolveAddr(n, str)
-	default:
-		panic(n)
-	}
-	if err != nil {
-		panic(err)
-	}
-	return
 }
 
 func (s *Socket) pushBacklog(syn syn) {
@@ -348,11 +331,6 @@ func (s *Socket) newConnID(remoteAddr net.Addr) (id uint16) {
 	return
 }
 
-var (
-	zeroipv4 = net.ParseIP("0.0.0.0")
-	zeroipv6 = net.ParseIP("::")
-)
-
 func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 	c = &Conn{
 		socket:           s,
@@ -362,21 +340,6 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 	c.sendPendingSendSendStateTimer = missinggo.StoppedFuncTimer(c.sendPendingSendStateTimerCallback)
 	c.packetReadTimeoutTimer = time.AfterFunc(packetReadTimeout, c.receivePacketTimeoutCallback)
 	return
-}
-
-func (s *Socket) resolveAddr(network, addr string) (net.Addr, error) {
-	n := s.network()
-	if network != "" {
-		n = network
-	}
-	if n == "inproc" {
-		return inproc.ResolveAddr(n, addr)
-	}
-	return net.ResolveUDPAddr(n, addr)
-}
-
-func (s *Socket) network() string {
-	return s.pc.LocalAddr().Network()
 }
 
 func (s *Socket) startOutboundConn(addr net.Addr) (c *Conn, err error) {
@@ -434,7 +397,7 @@ func (s *Socket) nextSyn() (syn syn, err error) {
 	for {
 		missinggo.WaitEvents(&mu, &s.closed, &s.backlogNotEmpty, &s.destroyed)
 		if s.closed.IsSet() {
-			err = errClosed
+			err = ErrClosed
 			return
 		}
 		if s.destroyed.IsSet() {

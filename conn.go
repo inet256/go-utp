@@ -543,7 +543,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 			return
 		}
 		if c.connDeadlines.read.passed.IsSet() {
-			err = errTimeout
+			err = ErrTimeout{}
 			return
 		}
 		missinggo.WaitEvents(&mu,
@@ -574,7 +574,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 	defer mu.Unlock()
 	for len(p) != 0 {
 		if c.wroteFin.IsSet() || c.closed.IsSet() {
-			err = errClosed
+			err = ErrClosed
 			return
 		}
 		if c.destroyed.IsSet() {
@@ -582,7 +582,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			return
 		}
 		if c.connDeadlines.write.passed.IsSet() {
-			err = errTimeout
+			err = ErrTimeout{}
 			return
 		}
 		// If peerWndSize is 0, we still want to send something, so don't

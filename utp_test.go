@@ -142,14 +142,14 @@ func TestConnReadDeadline(t *testing.T) {
 	dl := time.Now().Add(time.Millisecond)
 	c.SetReadDeadline(dl)
 	_, err := c.Read(nil)
-	require.Equal(t, errTimeout, err)
+	require.ErrorIs(t, err, ErrTimeout{})
 	// The deadline has passed.
 	if time.Now().Before(dl) {
 		t.Fatal("deadline hasn't passed")
 	}
 	// Returns timeout on subsequent read.
 	_, err = c.Read(nil)
-	require.Equal(t, errTimeout, err)
+	require.ErrorIs(t, err, ErrTimeout{})
 	// Disable the deadline.
 	c.SetReadDeadline(time.Time{})
 	readReturned := make(chan struct{})
@@ -496,7 +496,7 @@ func TestFillBuffers(t *testing.T) {
 		if err != nil {
 			// Receiver will stop processing packets, packets will be dropped,
 			// and thus not acked.
-			assert.Equal(t, errAckTimeout, err)
+			assert.ErrorIs(t, err, ErrTimeout{IsAck: true})
 			break
 		}
 		require.NotEqual(t, 0, n)

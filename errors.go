@@ -5,17 +5,24 @@ import (
 	"net"
 )
 
-// TODO: figure out errors
 var (
-	errClosed               = errors.New("closed")
-	errTimeout    net.Error = timeoutError{"i/o timeout"}
-	errAckTimeout           = timeoutError{"timed out waiting for ack"}
+	ErrClosed = net.ErrClosed
 )
 
-type timeoutError struct {
-	msg string
+type ErrTimeout struct {
+	IsAck bool
+	Msg   string
 }
 
-func (me timeoutError) Timeout() bool   { return true }
-func (me timeoutError) Error() string   { return me.msg }
-func (me timeoutError) Temporary() bool { return false }
+func (e ErrTimeout) Timeout() bool   { return true }
+func (e ErrTimeout) Error() string   { return "utp: timeout. " + e.Msg }
+func (e ErrTimeout) Temporary() bool { return false }
+
+func IsTimeout(err error) bool {
+	return errors.As(err, &ErrTimeout{})
+}
+
+func IsAckTimeout(err error) bool {
+	var e ErrTimeout
+	return errors.As(err, &e) && e.IsAck
+}
