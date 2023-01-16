@@ -12,16 +12,11 @@ import (
 
 	"github.com/anacrolix/missinggo"
 	"github.com/anacrolix/missinggo/pproffd"
+	"github.com/brendoncarroll/stdctx/logctx"
 	"github.com/brendoncarroll/stdctx/units"
 )
 
-var (
-	_ net.Listener = &Socket{}
-
-	// TODO: maybe add this back.
-	// Generally should not use, if you created the socket, then you already have access to the PacketConn.
-	// _ net.PacketConn = &Socket{}
-)
+var _ net.Listener = &Socket{}
 
 // Uniquely identifies any uTP connection on top of the underlying packet
 // stream.
@@ -37,6 +32,8 @@ func newConnKey(raddr net.Addr, connID uint16) connKey {
 // A Socket wraps a net.PacketConn, diverting uTP packets to its child uTP
 // Conns.
 type Socket struct {
+	config socketConfig
+
 	pc    net.PacketConn
 	conns map[connKey]*Conn
 
@@ -62,7 +59,12 @@ type Socket struct {
 // use of the net.PacketConn after the Socket closes it, override the
 // net.PacketConn's Close method, or use NetSocketFromPacketConnNoClose.
 func NewSocket(pc net.PacketConn, opts ...SocketOption) *Socket {
+	config := defaultSocketConfig()
+	for _, opt := range opts {
+		opt(&config)
+	}
 	s := &Socket{
+		config:      config,
 		backlog:     make(map[syn]struct{}, backlog),
 		pc:          pc,
 		unusedReads: make(chan read, 100),
@@ -108,7 +110,8 @@ func (s *Socket) LocalAddr() net.Addr {
 	return s.pc.LocalAddr()
 }
 
-// TODO: remove
+// ReadFrom
+// DEPRECATED:
 func (s *Socket) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	select {
 	case read, ok := <-s.unusedReads:
@@ -125,7 +128,8 @@ func (s *Socket) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	}
 }
 
-// TODO: remove
+// WriteTo
+// DEPRECATED
 func (s *Socket) WriteTo(b []byte, addr net.Addr) (n int, err error) {
 	mu.Lock()
 	if s.connDeadlines.write.passed.IsSet() {
@@ -184,7 +188,7 @@ func (s *Socket) reader() {
 			return
 		}
 		if err != nil {
-			log.Printf("error reading Socket PacketConn: %s", err)
+			logctx.Errorf(context.TODO(), "error reading Socket PacketConn: %s", err)
 			s.ReadErr = err
 			return
 		}
@@ -338,26 +342,25 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		created:          time.Now(),
 	}
 	c.sendPendingSendSendStateTimer = missinggo.StoppedFuncTimer(c.sendPendingSendStateTimerCallback)
-	c.packetReadTimeoutTimer = time.AfterFunc(packetReadTimeout, c.receivePacketTimeoutCallback)
+	c.packetReadTimeoutTimer = time.AfterFunc(s.config.packetReadTimeout, c.receivePacketTimeoutCallback)
 	return
 }
 
 func (s *Socket) startOutboundConn(addr net.Addr) (c *Conn, err error) {
+	ctx := context.TODO()
 	mu.Lock()
 	defer mu.Unlock()
 	c = s.newConn(addr)
 	c.recv_id = s.newConnID(c.RemoteAddr())
 	c.send_id = c.recv_id + 1
-	if logLevel >= 1 {
-		log.Printf("dial registering addr: %s", c.RemoteAddr().String())
-	}
+	logctx.Debugf(ctx, "dial registering addr: %s", c.RemoteAddr().String())
 	if !s.registerConn(c.recv_id, c.RemoteAddr(), c) {
 		err = errors.New("couldn't register new connection")
-		log.Println(c.recv_id, c.RemoteAddr().String())
+		logctx.Debugln(ctx, c.recv_id, c.RemoteAddr().String())
 		for k, c := range s.conns {
-			log.Println(k, c, c.age())
+			logctx.Debugln(ctx, k, c, c.age())
 		}
-		log.Printf("that's %d connections", len(s.conns))
+		logctx.Debugf(ctx, "that's %d connections", len(s.conns))
 	}
 	if err != nil {
 		return

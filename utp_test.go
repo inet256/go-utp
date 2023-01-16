@@ -6,8 +6,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -17,7 +15,6 @@ import (
 
 	_ "github.com/anacrolix/envpprof"
 	"github.com/anacrolix/missinggo/leaktest"
-	"github.com/bradfitz/iter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/nettest"
@@ -44,7 +41,12 @@ func newTestPC(t testing.TB) net.PacketConn {
 // newTestSocket sets up a socket using pc as the underlying PacketConn
 // the socket is closed at the end of the test
 func newTestSocket(t testing.TB, pc net.PacketConn) *Socket {
-	s := NewSocket(pc)
+	opts := []SocketOption{
+		WithWriteTimeout(1 * time.Second),
+		WithInitialLatency(10 * time.Millisecond),
+		WithPacketReadTimeout(2 * time.Second),
+	}
+	s := NewSocket(pc, opts...)
 	t.Cleanup(func() { s.Close() })
 	return s
 }
@@ -67,12 +69,6 @@ func newTestConnPair(t testing.TB) (client, server net.Conn) {
 		server.Close()
 	})
 	return client, server
-}
-
-func setDefaultTestingDurations() {
-	writeTimeout = 1 * time.Second
-	initialLatency = 10 * time.Millisecond
-	packetReadTimeout = 2 * time.Second
 }
 
 func TestUTPPingPong(t *testing.T) {
@@ -174,23 +170,25 @@ func TestConnReadDeadline(t *testing.T) {
 	}
 }
 
-func connectSelfLots(n int, t testing.TB) {
+func connectSelfLots(t testing.TB, n int) {
 	defer leaktest.GoroutineLeakCheck(t)()
 
 	s := newTestSocket(t, newTestUDP(t))
-	go func() {
-		for range iter.N(n) {
+	eg := errgroup.Group{}
+	eg.Go(func() error {
+		for i := 0; i < n; i++ {
 			c, err := s.Accept()
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 			defer c.Close()
 		}
-	}()
+		return nil
+	})
 	dialErr := make(chan error)
 	connCh := make(chan net.Conn)
 	dialSema := make(chan struct{}, backlog)
-	for range iter.N(n) {
+	for i := 0; i < n; i++ {
 		go func() {
 			dialSema <- struct{}{}
 			c, err := s.DialContext(ctx, s.Addr())
@@ -203,7 +201,7 @@ func connectSelfLots(n int, t testing.TB) {
 		}()
 	}
 	conns := make([]net.Conn, 0, n)
-	for range iter.N(n) {
+	for i := 0; i < n; i++ {
 		select {
 		case c := <-connCh:
 			conns = append(conns, c)
@@ -225,17 +223,17 @@ func TestConnectSelf(t *testing.T) {
 	// A rough guess says that at worst, I can only have 0x10000/3 connections
 	// to the same socket, due to fragmentation in the assigned connection
 	// IDs.
-	connectSelfLots(0x100, t)
+	connectSelfLots(t, 0x100)
 }
 
 func BenchmarkConnectSelf(b *testing.B) {
-	for range iter.N(b.N) {
-		connectSelfLots(2, b)
+	for i := 0; i < b.N; i++ {
+		connectSelfLots(b, 2)
 	}
 }
 
 func BenchmarkNewCloseSocket(b *testing.B) {
-	for range iter.N(b.N) {
+	for i := 0; i < b.N; i++ {
 		s := NewSocket(newTestUDP(b))
 		s.Close()
 	}
@@ -250,7 +248,7 @@ func TestRejectDialBacklogFilled(t *testing.T) {
 		errChan <- err
 	}
 	// Fill the backlog.
-	for range iter.N(backlog) {
+	for i := 0; i < backlog; i++ {
 		go dial()
 	}
 	sleepWhile(&mu, func() bool { return len(s.backlog) < backlog })
@@ -264,7 +262,7 @@ func TestRejectDialBacklogFilled(t *testing.T) {
 	err := <-errChan
 	assert.EqualError(t, err, "peer reset")
 	s.Close()
-	for range iter.N(backlog) {
+	for i := 0; i < backlog; i++ {
 		<-errChan
 	}
 }
@@ -307,12 +305,8 @@ func connPairSocket(s *Socket) (initer, accepted net.Conn) {
 // Check that peer sending FIN doesn't cause unread data to be dropped in a
 // receiver.
 func TestReadFinishedConn(t *testing.T) {
+	// TODO: This test injected artifical packet drops.
 	a, b := newTestConnPair(t)
-	// TODO: unreliable packets
-	mu.Lock()
-	originalAPDC := artificialPacketDropChance
-	artificialPacketDropChance = 1
-	mu.Unlock()
 
 	n, err := a.Write([]byte("hello"))
 	require.Equal(t, 5, n)
@@ -321,13 +315,8 @@ func TestReadFinishedConn(t *testing.T) {
 	require.Equal(t, 5, n)
 	require.NoError(t, err)
 
-	// TODO: unreliable packets
-	mu.Lock()
-	artificialPacketDropChance = originalAPDC
-	mu.Unlock()
-
 	a.Close()
-	all, err := ioutil.ReadAll(b)
+	all, err := io.ReadAll(b)
 	require.NoError(t, err)
 	require.EqualValues(t, "helloworld", all)
 }
@@ -430,7 +419,6 @@ func TestMain(m *testing.M) {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		WriteStatus(w)
 	})
-	setDefaultTestingDurations()
 	code := m.Run()
 	sleepWhileTimeout(&mu, func() bool {
 		return len(sockets) != 0
@@ -458,7 +446,7 @@ func TestWriteClose(t *testing.T) {
 	defer b.Close()
 	a.Write([]byte("hiho"))
 	a.Close()
-	c, err := ioutil.ReadAll(b)
+	c, err := io.ReadAll(b)
 	require.NoError(t, err)
 	require.EqualValues(t, "hiho", c)
 	b.Close()
@@ -503,7 +491,7 @@ func TestFillBuffers(t *testing.T) {
 	}
 	t.Logf("buffered %d bytes", len(sent))
 	a.Close()
-	all, err := ioutil.ReadAll(b)
+	all, err := io.ReadAll(b)
 	assert.NoError(t, err)
 	assert.EqualValues(t, len(sent), len(all))
 	assert.EqualValues(t, sent, all)
@@ -516,7 +504,7 @@ func BenchmarkEchoLongBuffer(tb *testing.B) {
 	require.NoError(tb, err)
 	tb.SetBytes(int64(len(pristine)))
 	tb.ResetTimer()
-	for range iter.N(tb.N) {
+	for i := 0; i < tb.N; i++ {
 		func() {
 			a, b := newTestConnPair(tb)
 			defer a.Close()
@@ -664,7 +652,7 @@ func testSimpleRead(t *testing.T, serverBindIP string, clientDialIP string) {
 	require.NoError(t, err)
 	defer client.Close()
 
-	response, err := ioutil.ReadAll(client)
+	response, err := io.ReadAll(client)
 	require.NoError(t, err)
 
 	require.Equal(t, "hello", string(response))

@@ -5,13 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"time"
 
 	"github.com/anacrolix/missinggo"
+	"github.com/brendoncarroll/stdctx/logctx"
 	"github.com/brendoncarroll/stdctx/units"
 )
+
+var _ net.Conn = &Conn{}
 
 // Conn is a uTP stream and implements net.Conn. It owned by a Socket, which
 // handles dispatching packets to and from Conns.
@@ -60,10 +62,6 @@ type Conn struct {
 	// This timer fires when no packet has been received for a period.
 	packetReadTimeoutTimer *time.Timer
 }
-
-var (
-	_ net.Conn = &Conn{}
-)
 
 func (c *Conn) age() time.Duration {
 	return time.Since(c.created)
@@ -225,7 +223,7 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 // TODO: Introduce a minimum latency.
 func (c *Conn) latency() (ret time.Duration) {
 	if len(c.latencies) == 0 {
-		return initialLatency
+		return c.socket.config.initialLatency
 	}
 	for _, l := range c.latencies {
 		ret += l
@@ -334,7 +332,7 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 
 // Handle a packet destined for this connection.
 func (c *Conn) receivePacket(h header, payload []byte) {
-	c.packetReadTimeoutTimer.Reset(packetReadTimeout)
+	c.packetReadTimeoutTimer.Reset(c.socket.config.packetReadTimeout)
 	c.processDelivery(h, payload)
 }
 
@@ -395,9 +393,7 @@ func (c *Conn) processDelivery(h header, payload []byte) {
 	// 64 should correspond to 8 bytes of selective ack.
 	if inboundIndex >= maxUnackedInbound {
 		// Discard packet too far ahead.
-		if logLevel >= 1 {
-			log.Printf("received packet from %s %d ahead of next seqnr (%x > %x)", c.remoteSocketAddr, inboundIndex, h.SeqNr, c.ack_nr+1)
-		}
+		logctx.Debugf(context.TODO(), "received packet from %s %d ahead of next seqnr (%x > %x)", c.remoteSocketAddr, inboundIndex, h.SeqNr, c.ack_nr+1)
 		return
 	}
 	// Extend inbound so the new packet has a place.

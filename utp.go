@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -40,37 +38,11 @@ const (
 	pendingSendStateDelay = 500 * time.Microsecond
 )
 
-var (
-	sendBufferPool = sync.Pool{
-		New: func() interface{} { return make([]byte, minMTU) },
-	}
-	// This is the latency we assume on new connections. It should be higher
-	// than the latency we expect on most connections to prevent excessive
-	// resending to peers that take a long time to respond, before we've got a
-	// better idea of their actual latency.
-	initialLatency time.Duration
-	// If a write isn't acked within this period, destroy the connection.
-	writeTimeout time.Duration
-	// Assume the connection has been closed by the peer getting no packets of
-	// any kind for this time.
-	packetReadTimeout time.Duration
-)
-
-func setDefaultDurations() {
-	// An approximate upper bound for most connections across the world.
-	initialLatency = 400 * time.Millisecond
-	// Getting no reply for this period for a packet, we can probably rule out
-	// latency and client lag.
-	writeTimeout = 15 * time.Second
-	// Somewhere longer than the BitTorrent grace period (90-120s), and less
-	// than default TCP reset (4min).
-	packetReadTimeout = 2 * time.Minute
+var sendBufferPool = sync.Pool{
+	New: func() interface{} { return make([]byte, minMTU) },
 }
 
-func init() {
-	// TODO: Remove
-	setDefaultDurations()
-}
+const ()
 
 type read struct {
 	data []byte
@@ -84,17 +56,9 @@ type syn struct {
 
 var (
 	// TODO: what the actual fuck?
-	mu                         pprofsync.RWMutex
-	sockets                    = map[*Socket]struct{}{}
-	logLevel                   = 0
-	artificialPacketDropChance = 0.0
+	mu      pprofsync.RWMutex
+	sockets = map[*Socket]struct{}{}
 )
-
-// TODO: remove
-func init() {
-	logLevel, _ = strconv.Atoi(os.Getenv("GO_UTP_LOGGING"))
-	fmt.Sscanf(os.Getenv("GO_UTP_PACKET_DROP"), "%f", &artificialPacketDropChance)
-}
 
 type st int
 
