@@ -150,7 +150,7 @@ func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err 
 	if c.unpendSendState() && _type != stState {
 		// We needed to send a state packet, but this packet suppresses that
 		// need.
-		telemIncr(ctx, "unsentStatePackets", int(1), units.None)
+		telemIncr(context.TODO(), "unsentStatePackets", int(1), units.None)
 	}
 	return
 }
