@@ -2,6 +2,7 @@ package utp
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/anacrolix/missinggo"
@@ -9,6 +10,7 @@ import (
 )
 
 type send struct {
+	mu          sync.Mutex
 	acked       missinggo.Event
 	payloadSize uint32
 	started     missinggo.MonotonicTime
@@ -47,8 +49,8 @@ func (s *send) timedOut() {
 }
 
 func (s *send) timeoutResend() {
-	mu.Lock()
-	defer mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if missinggo.MonotonicSince(s.started) >= s.conn.socket.config.writeTimeout {
 		s.timedOut()
 		return

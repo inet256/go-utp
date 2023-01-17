@@ -33,7 +33,9 @@ func newConnKey(raddr net.Addr, connID uint16) connKey {
 type Socket struct {
 	config socketConfig
 
-	pc    net.PacketConn
+	pc net.PacketConn
+
+	mu    sync.RWMutex
 	conns map[connKey]*Conn
 
 	backlogNotEmpty missinggo.Event
@@ -69,9 +71,7 @@ func NewSocket(pc net.PacketConn, opts ...SocketOption) *Socket {
 		unusedReads: make(chan read, 100),
 		wgReadWrite: sync.WaitGroup{},
 	}
-	mu.Lock()
-	sockets[s] = struct{}{} // TODO: remove
-	mu.Unlock()
+	s.connDeadlines = newConnDeadlines(&s.mu)
 	go s.reader()
 	return s
 }
@@ -464,8 +464,8 @@ func (s *Socket) Addr() net.Addr {
 }
 
 func (s *Socket) CloseNow() error {
-	mu.Lock()
-	defer mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.closed.Set()
 	for _, c := range s.conns {
 		c.closeNow()
@@ -494,7 +494,6 @@ func (s *Socket) lazyDestroy() {
 }
 
 func (s *Socket) destroy() {
-	delete(sockets, s)
 	s.destroyed.Set()
 	s.pc.Close()
 	for _, c := range s.conns {
