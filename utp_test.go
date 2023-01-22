@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -214,7 +212,7 @@ func connectSelfLots(t testing.TB, n int) {
 			c.Close()
 		}
 	}
-	sleepWhile(&mu, func() bool { return len(s.conns) != 0 })
+	sleepWhile(&s.mu, func() bool { return len(s.conns) != 0 })
 	s.Close()
 }
 
@@ -251,7 +249,7 @@ func TestRejectDialBacklogFilled(t *testing.T) {
 	for i := 0; i < DefaultBacklogLen; i++ {
 		go dial()
 	}
-	sleepWhile(&mu, func() bool { return len(s.backlog) < DefaultBacklogLen })
+	sleepWhile(&s.mu, func() bool { return len(s.backlog) < DefaultBacklogLen })
 	select {
 	case err := <-errChan:
 		t.Fatalf("got premature error: %s", err)
@@ -334,7 +332,7 @@ func TestCloseDetachesQuickly(t *testing.T) {
 	}()
 	b, _ := s.Accept()
 	b.Close()
-	sleepWhile(&mu, func() bool { return len(s.conns) != 0 })
+	sleepWhile(&s.mu, func() bool { return len(s.conns) != 0 })
 }
 
 // Check that closing, and resulting detach of a Conn doesn't close the parent
@@ -364,15 +362,15 @@ func TestConnCloseUnclosedSocket(t *testing.T) {
 		// test failure exception is thrown. "Do as we say, not as we do" -Go
 		// team.
 		func() {
-			mu.Lock()
-			defer mu.Unlock()
+			s.mu.Lock()
+			defer s.mu.Unlock()
 			require.Len(t, s.conns, 1)
 		}()
 		dialerSync <- struct{}{}
 		require.NoError(t, a.Close())
 
 		// TODO: remove sleep
-		sleepWhile(&mu, func() bool { return len(s.conns) != 0 })
+		sleepWhile(&s.mu, func() bool { return len(s.conns) != 0 })
 	}
 }
 
@@ -413,24 +411,6 @@ func sleepWhileTimeout(l sync.Locker, cond func() bool, timeout time.Duration) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-}
-
-func TestMain(m *testing.M) {
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		WriteStatus(w)
-	})
-	code := m.Run()
-	sleepWhileTimeout(&mu, func() bool {
-		return len(sockets) != 0
-	}, time.Second)
-	mu.Lock()
-	numSockets := len(sockets)
-	mu.Unlock()
-	if numSockets != 0 {
-		code = 1
-		WriteStatus(os.Stderr)
-	}
-	os.Exit(code)
 }
 
 func TestAcceptReturnsAfterClose(t *testing.T) {
@@ -554,7 +534,7 @@ func TestSocketDestroyedConnsClosedTimeout(t *testing.T) {
 	// Now its wrappers, that may be confused right now.
 	s1.Close()
 	// s1 should have been destroyed.
-	<-s1.destroyed.LockedChan(&mu)
+	<-s1.destroyed.LockedChan(&s1.mu)
 	s1c.Close()
 	// Check that we can now listen in Socket 1's place.
 	for {
@@ -571,7 +551,7 @@ func TestSocketDestroyedConnsClosedTimeout(t *testing.T) {
 	s2c.Close()
 	s2.Close()
 	// s2 should be destroyed when the write timeout on s2c occurs.
-	<-s2.destroyed.LockedChan(&mu)
+	<-s2.destroyed.LockedChan(&s2.mu)
 }
 
 // Make sure that creating two connecting sockets repeatedly will successfully
