@@ -33,7 +33,9 @@ func newConnKey(raddr net.Addr, connID uint16) connKey {
 type Socket struct {
 	config socketConfig
 
-	pc    net.PacketConn
+	pc net.PacketConn
+
+	mu    sync.RWMutex
 	conns map[connKey]*Conn
 
 	backlogNotEmpty missinggo.Event
@@ -69,9 +71,7 @@ func NewSocket(pc net.PacketConn, opts ...SocketOption) *Socket {
 		unusedReads: make(chan read, 100),
 		wgReadWrite: sync.WaitGroup{},
 	}
-	mu.Lock()
-	sockets[s] = struct{}{} // TODO: remove
-	mu.Unlock()
+	s.connDeadlines = newConnDeadlines(&s.mu)
 	go s.reader()
 	return s
 }
@@ -92,14 +92,14 @@ func (s *Socket) DialContext(ctx context.Context, addr net.Addr) (nc net.Conn, e
 		err = ctx.Err()
 	}
 	if err != nil {
-		mu.Lock()
+		s.mu.Lock()
 		c.destroy(errors.New("dial timeout"))
-		mu.Unlock()
+		s.mu.Unlock()
 		return
 	}
-	mu.Lock()
+	s.mu.Lock()
 	c.updateCanWrite()
-	mu.Unlock()
+	s.mu.Unlock()
 	nc = pproffd.WrapNetConn(c)
 	return
 }
@@ -121,7 +121,7 @@ func (s *Socket) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 		n = copy(p, read.data)
 		addr = read.from
 		return
-	case <-s.connDeadlines.read.passed.LockedChan(&mu):
+	case <-s.connDeadlines.read.passed.LockedChan(&s.mu):
 		err = ErrTimeout{}
 		return
 	}
@@ -130,13 +130,13 @@ func (s *Socket) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 // WriteTo
 // DEPRECATED
 func (s *Socket) WriteTo(b []byte, addr net.Addr) (n int, err error) {
-	mu.Lock()
+	s.mu.Lock()
 	if s.connDeadlines.write.passed.IsSet() {
 		err = ErrTimeout{}
 	}
 	s.wgReadWrite.Add(1)
 	defer s.wgReadWrite.Done()
-	mu.Unlock()
+	s.mu.Unlock()
 	if err != nil {
 		return
 	}
@@ -173,16 +173,16 @@ func (s *Socket) pushBacklog(syn syn) {
 }
 
 func (s *Socket) reader() {
-	mu.Lock()
-	defer mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.destroy()
 	var b [maxRecvSize]byte
 	for {
 		s.wgReadWrite.Add(1)
-		mu.Unlock()
+		s.mu.Unlock()
 		n, addr, err := s.pc.ReadFrom(b[:])
 		s.wgReadWrite.Done()
-		mu.Lock()
+		s.mu.Lock()
 		if s.destroyed.IsSet() {
 			return
 		}
@@ -347,8 +347,8 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 
 func (s *Socket) startOutboundConn(addr net.Addr) (c *Conn, err error) {
 	ctx := context.TODO()
-	mu.Lock()
-	defer mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	c = s.newConn(addr)
 	c.recv_id = s.newConnID(c.RemoteAddr())
 	c.send_id = c.recv_id + 1
@@ -397,7 +397,7 @@ func (s *Socket) backlogChanged() {
 
 func (s *Socket) nextSyn() (syn syn, err error) {
 	for {
-		missinggo.WaitEvents(&mu, &s.closed, &s.backlogNotEmpty, &s.destroyed)
+		missinggo.WaitEvents(&s.mu, &s.closed, &s.backlogNotEmpty, &s.destroyed)
 		if s.closed.IsSet() {
 			err = ErrClosed
 			return
@@ -443,8 +443,8 @@ func (s *Socket) ackSyn(syn syn) (c *Conn, ok bool) {
 
 // Accept and return a new uTP connection.
 func (s *Socket) Accept() (net.Conn, error) {
-	mu.Lock()
-	defer mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for {
 		syn, err := s.nextSyn()
 		if err != nil {
@@ -464,8 +464,8 @@ func (s *Socket) Addr() net.Addr {
 }
 
 func (s *Socket) CloseNow() error {
-	mu.Lock()
-	defer mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.closed.Set()
 	for _, c := range s.conns {
 		c.closeNow()
@@ -476,8 +476,8 @@ func (s *Socket) CloseNow() error {
 }
 
 func (s *Socket) Close() error {
-	mu.Lock()
-	defer mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.closed.Set()
 	s.lazyDestroy()
 	return nil
@@ -494,7 +494,6 @@ func (s *Socket) lazyDestroy() {
 }
 
 func (s *Socket) destroy() {
-	delete(sockets, s)
 	s.destroyed.Set()
 	s.pc.Close()
 	for _, c := range s.conns {

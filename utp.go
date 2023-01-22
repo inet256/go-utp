@@ -6,7 +6,6 @@ import (
 	"net"
 	"time"
 
-	pprofsync "github.com/anacrolix/sync"
 	"github.com/brendoncarroll/stdctx/units"
 )
 
@@ -41,12 +40,6 @@ type syn struct {
 	seq_nr, conn_id uint16
 	addr            net.Addr
 }
-
-var (
-	// TODO: what the actual fuck?
-	mu      pprofsync.RWMutex
-	sockets = map[*Socket]struct{}{}
-)
 
 type st int
 

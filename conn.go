@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/anacrolix/missinggo"
@@ -18,20 +19,22 @@ var _ net.Conn = &Conn{}
 // Conn is a uTP stream and implements net.Conn. It owned by a Socket, which
 // handles dispatching packets to and from Conns.
 type Conn struct {
+	socket           *Socket
+	remoteSocketAddr net.Addr
+	connKey          connKey
+
+	mu               sync.Mutex
 	recv_id, send_id uint16
 	seq_nr, ack_nr   uint16
 	lastAck          uint16
 	lastTimeDiff     uint32
 	peerWndSize      uint32
 	cur_window       uint32
-	connKey          connKey
 
 	// Data waiting to be Read.
 	readBuf         []byte
 	readBufNotEmpty missinggo.Event
 
-	socket           *Socket
-	remoteSocketAddr net.Addr
 	// The uTP timestamp.
 	startTimestamp uint32
 	// When the conn was allocated.
@@ -72,8 +75,8 @@ func (c *Conn) timestamp() uint32 {
 }
 
 func (c *Conn) sendPendingSendStateTimerCallback() {
-	mu.Lock()
-	defer mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.sendPendingSendStateTimerActive = false
 	c.sendPendingSendSendStateTimer.Stop()
 	c.sendPendingState()
@@ -338,9 +341,9 @@ func (c *Conn) receivePacket(h header, payload []byte) {
 }
 
 func (c *Conn) receivePacketTimeoutCallback() {
-	mu.Lock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.destroy(errors.New("no packet read timeout"))
-	mu.Unlock()
 }
 
 func (c *Conn) lazyDestroy() {
@@ -462,14 +465,14 @@ func (c *Conn) waitAck(seq uint16) {
 	if send == nil {
 		return
 	}
-	missinggo.WaitEvents(&mu, &send.acked, &c.destroyed)
+	missinggo.WaitEvents(&c.mu, &send.acked, &c.destroyed)
 	return
 }
 
 // Waits for sent SYN to be ACKed. Returns any errors.
 func (c *Conn) recvSynAck() (err error) {
-	mu.Lock()
-	defer mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.waitAck(1)
 	if c.err != nil {
 		err = c.err
@@ -504,8 +507,8 @@ func (c *Conn) closeNow() (err error) {
 }
 
 func (c *Conn) Close() (err error) {
-	mu.Lock()
-	defer mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.closed.Set()
 	c.writeFin()
 	c.lazyDestroy()
@@ -517,8 +520,8 @@ func (c *Conn) LocalAddr() net.Addr {
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
-	mu.Lock()
-	defer mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for {
 		n = copy(b, c.readBuf)
 		c.readBuf = c.readBuf[n:]
@@ -543,7 +546,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 			err = ErrTimeout{}
 			return
 		}
-		missinggo.WaitEvents(&mu,
+		missinggo.WaitEvents(&c.mu,
 			&c.gotFin,
 			&c.closed,
 			&c.destroyed,
@@ -567,8 +570,8 @@ func (c *Conn) updateCanWrite() {
 }
 
 func (c *Conn) Write(p []byte) (n int, err error) {
-	mu.Lock()
-	defer mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for len(p) != 0 {
 		if c.wroteFin.IsSet() || c.closed.IsSet() {
 			err = ErrClosed
@@ -597,7 +600,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			p = p[n1:]
 			continue
 		}
-		missinggo.WaitEvents(&mu,
+		missinggo.WaitEvents(&c.mu,
 			&c.wroteFin,
 			&c.closed,
 			&c.destroyed,
@@ -609,7 +612,9 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 
 func (c *Conn) detach() {
 	s := c.socket
+	s.mu.Lock()
 	_, ok := s.conns[c.connKey]
+	s.mu.Unlock()
 	if !ok {
 		return
 	}
